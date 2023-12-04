@@ -1,6 +1,6 @@
 import copy
 from functools import partial
-import os
+from pathlib import Path
 import pickle
 from threading import Thread
 
@@ -20,36 +20,46 @@ try:
 except ImportError:
     _HAVE_VTK = False
 
-from .plotmodel import PlotModel, DomainTableModel
+from .plotmodel import PlotModel, DomainTableModel, hash_model
 from .plotgui import PlotImage, ColorDialog
 from .docks import DomainDock, TallyDock
 from .overlays import ShortcutsOverlay
 from .tools import ExportDataDialog
 
-_COORD_LEVELS = 0
 
-def _openmcReload():
+def _openmcReload(threads=None, model_path='.'):
     # reset OpenMC memory, instances
     openmc.lib.reset()
     openmc.lib.finalize()
     # initialize geometry (for volume calculation)
     openmc.lib.settings.output_summary = False
-    openmc.lib.init(["-c"])
+    args = ["-c"]
+    if threads is not None:
+        args += ["-s", str(threads)]
+    args.append(str(model_path))
+    openmc.lib.init(args)
+    openmc.lib.settings.verbosity = 1
+
 
 class MainWindow(QMainWindow):
-    def __init__(self, font=QtGui.QFontMetrics(QtGui.QFont()), screen_size=QtCore.QSize()):
+    def __init__(self,
+                 font=QtGui.QFontMetrics(QtGui.QFont()),
+                 screen_size=QtCore.QSize(),
+                 model_path='.', threads=None):
         super().__init__()
 
         self.screen = screen_size
         self.font_metric = font
         self.setWindowTitle('OpenMC Plot Explorer')
+        self.model_path = Path(model_path)
+        self.threads = threads
 
-    def loadGui(self):
+    def loadGui(self, use_settings_pkl=True):
 
         self.pixmap = None
         self.zoom = 100
 
-        self.loadModel()
+        self.loadModel(use_settings_pkl=use_settings_pkl)
 
         # Create viewing area
         self.frame = QScrollArea(self)
@@ -64,6 +74,7 @@ class MainWindow(QMainWindow):
 
         # Create plot image
         self.plotIm = PlotImage(self.model, self.frame, self)
+        self.plotIm.frozen = True
         self.frame.setWidget(self.plotIm)
 
         # Dock
@@ -108,8 +119,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('')
 
         # Timer allows GUI to render before plot finishes loading
-        QtCore.QTimer.singleShot(0, self.plotIm.generatePixmap)
         QtCore.QTimer.singleShot(0, self.showCurrentView)
+
+        self.plotIm.frozen = False
 
     def event(self, event):
         # use pinch event to update zoom
@@ -148,7 +160,8 @@ class MainWindow(QMainWindow):
         self.saveImageAction.setShortcut("Ctrl+Shift+S")
         self.saveImageAction.setToolTip('Save plot image')
         self.saveImageAction.setStatusTip('Save plot image')
-        self.saveImageAction.triggered.connect(self.saveImage)
+        save_image_connector = partial(self.saveImage, filename=None)
+        self.saveImageAction.triggered.connect(save_image_connector)
 
         self.saveViewAction = QAction("Save &View...", self)
         self.saveViewAction.setShortcut(QtGui.QKeySequence.Save)
@@ -190,8 +203,13 @@ class MainWindow(QMainWindow):
         self.openStatePointAction.setToolTip('Open statepoint file')
         self.openStatePointAction.triggered.connect(self.openStatePoint)
 
+        self.importPropertiesAction = QAction("&Import properties...", self)
+        self.importPropertiesAction.setToolTip("Import properties")
+        self.importPropertiesAction.triggered.connect(self.importProperties)
+
         self.dataMenu = self.mainMenu.addMenu('D&ata')
         self.dataMenu.addAction(self.openStatePointAction)
+        self.dataMenu.addAction(self.importPropertiesAction)
         self.updateDataMenu()
 
         # Edit Menu
@@ -404,6 +422,7 @@ class MainWindow(QMainWindow):
         self.maskingAction.setChecked(self.model.currentView.masking)
         self.highlightingAct.setChecked(self.model.currentView.highlighting)
         self.outlineAct.setChecked(self.model.currentView.outlines)
+        self.overlapAct.setChecked(self.model.currentView.color_overlaps)
 
         num_previous_views = len(self.model.previousViews)
         self.undoAction.setText('&Undo ({})'.format(num_previous_views))
@@ -432,22 +451,38 @@ class MainWindow(QMainWindow):
         self.colorDialogAction.setChecked(self.colorDialog.isActiveWindow())
         self.mainWindowAction.setChecked(self.isActiveWindow())
 
+    def saveBatchImage(self, view_file):
+        """
+        Loads a view in the GUI and generates an image
+
+        Parameters
+        ----------
+        view_file : str or pathlib.Path
+            The path to a view file that is compatible with the loaded model.
+        """
+        # store the
+        cv = self.model.currentView
+        # load the view from file
+        self.loadViewFile(view_file)
+        self.plotIm.saveImage(view_file.replace('.pltvw', ''))
+
     # Menu and shared methods
-    def loadModel(self, reload=False):
+    def loadModel(self, reload=False, use_settings_pkl=True):
         if reload:
             self.resetModels()
         else:
-            # create new plot model
-            self.model = PlotModel()
-            self.restoreModelSettings()
+            self.model = PlotModel(use_settings_pkl, self.model_path)
+
             # update plot and model settings
             self.updateRelativeBases()
 
         self.cellsModel = DomainTableModel(self.model.activeView.cells)
         self.materialsModel = DomainTableModel(self.model.activeView.materials)
 
+        openmc_args = {'threads': self.threads, 'model_path': self.model_path}
+
         if reload:
-            loader_thread = Thread(target=_openmcReload)
+            loader_thread = Thread(target=_openmcReload, kwargs=openmc_args)
             loader_thread.start()
             while loader_thread.is_alive():
                 self.statusBar().showMessage("Reloading model...")
@@ -456,15 +491,14 @@ class MainWindow(QMainWindow):
             self.plotIm.model = self.model
             self.applyChanges()
 
-    def saveImage(self):
-        filename, ext = QFileDialog.getSaveFileName(self,
-                                                    "Save Plot Image",
-                                                    "untitled",
-                                                    "Images (*.png)")
+    def saveImage(self, filename=None):
+        if filename is None:
+            filename, ext = QFileDialog.getSaveFileName(self,
+                                                        "Save Plot Image",
+                                                        "untitled",
+                                                        "Images (*.png)")
         if filename:
-            if "." not in filename:
-                filename += ".png"
-            self.plotIm.figure.savefig(filename, transparent=True)
+            self.plotIm.saveImage(filename)
             self.statusBar().showMessage('Plot Image Saved', 5000)
 
     def saveView(self):
@@ -481,26 +515,29 @@ class MainWindow(QMainWindow):
             with open(filename, 'wb') as file:
                 pickle.dump(saved, file)
 
+    def loadViewFile(self, filename):
+        try:
+            with open(filename, 'rb') as file:
+                saved = pickle.load(file)
+        except Exception:
+            message = 'Error loading plot settings'
+            saved = {'version': None,
+                        'current': None}
+        if saved['version'] == self.model.version:
+            self.model.activeView = saved['current']
+            self.dock.updateDock()
+            self.colorDialog.updateDialogValues()
+            self.applyChanges()
+            message = '{} settings loaded'.format(filename)
+        else:
+            message = 'Error loading plot settings. Incompatible model.'
+        self.statusBar().showMessage(message, 5000)
+
     def openView(self):
         filename, ext = QFileDialog.getOpenFileName(self, "Open View Settings",
                                                     ".", "*.pltvw")
         if filename:
-            try:
-                with open(filename, 'rb') as file:
-                    saved = pickle.load(file)
-            except Exception:
-                message = 'Error loading plot settings'
-                saved = {'version': None,
-                         'current': None}
-            if saved['version'] == self.model.version:
-                self.model.activeView = saved['current']
-                self.dock.updateDock()
-                self.colorDialog.updateDialogValues()
-                self.applyChanges()
-                message = '{} settings loaded'.format(filename)
-            else:
-                message = 'Error loading plot settings. Incompatible model.'
-            self.statusBar().showMessage(message, 5000)
+            self.loadViewFile(filename)
 
     def openStatePoint(self):
         # check for an alread-open statepoint
@@ -531,6 +568,28 @@ class MainWindow(QMainWindow):
             self.updateDataMenu()
             self.tallyDock.update()
 
+    def importProperties(self):
+        filename, ext = QFileDialog.getOpenFileName(self, "Import properties",
+                                                    ".", "*.h5")
+        if not filename:
+            return
+
+        try:
+            openmc.lib.import_properties(filename)
+            message = 'Imported properties: {}'
+        except (FileNotFoundError, OSError, openmc.lib.exc.OpenMCError) as e:
+            message = 'Error opening properties file: {}'
+            msg_box = QMessageBox()
+            msg_box.setText(f"Error opening properties file: \n\n {e} \n")
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setStandardButtons(QMessageBox.Ok)
+            msg_box.exec_()
+        finally:
+            self.statusBar().showMessage(message.format(filename), 5000)
+
+        if self.model.activeView.colorby == 'temperature':
+            self.applyChanges()
+
     def closeStatePoint(self):
         # remove the statepoint object and update the data menu
         filename = self.model.statepoint.filename
@@ -558,6 +617,8 @@ class MainWindow(QMainWindow):
         if self.model.activeView != self.model.currentView:
             self.statusBar().showMessage('Generating Plot...')
             QApplication.processEvents()
+            if self.model.activeView.selectedTally is not None:
+                self.tallyDock.updateModel()
             self.model.storeCurrent()
             self.model.subsequentViews = []
             self.plotIm.generatePixmap()
@@ -874,12 +935,6 @@ class MainWindow(QMainWindow):
         av = self.model.activeView
         av.tallyValue = event
 
-    def updateScores(self, state):
-        self.tallyDock.updateScores()
-
-    def updateNuclides(self, state):
-        self.tallyDock.updateNuclides()
-
     def toggleTallyVisibility(self, state, apply=False):
         av = self.model.activeView
         av.tallyDataVisible = bool(state)
@@ -1029,36 +1084,6 @@ class MainWindow(QMainWindow):
 
         self.colorDialog.setVisible(is_visible)
 
-    def restoreModelSettings(self):
-        if os.path.isfile("plot_settings.pkl"):
-
-            with open('plot_settings.pkl', 'rb') as file:
-                model = pickle.load(file)
-
-            # do not replace model if the version is out of date
-            if model.version != self.model.version:
-                print("WARNING: previous plot settings are for a different "
-                      "version of the GUI. They will be ignored.")
-                wrn_msg = "Existing version: {}, Current GUI version: {}"
-                print(wrn_msg.format(model.version, self.model.version))
-                return
-
-            try:
-                self.model.statepoint = model.statepoint
-            except OSError:
-                msg_box = QMessageBox()
-                msg = "Could not open statepoint file: \n\n {} \n"
-                msg_box.setText(msg.format(self.model.statepoint.filename))
-                msg_box.setIcon(QMessageBox.Warning)
-                msg_box.setStandardButtons(QMessageBox.Ok)
-                msg_box.exec_()
-                self.model.statepoint = None
-
-            self.model.currentView = model.currentView
-            self.model.activeView = copy.deepcopy(model.currentView)
-            self.model.previousViews = model.previousViews
-            self.model.subsequentViews = model.subsequentViews
-
     def resetModels(self):
         self.cellsModel = DomainTableModel(self.model.activeView.cells)
         self.materialsModel = DomainTableModel(self.model.activeView.materials)
@@ -1149,17 +1174,50 @@ class MainWindow(QMainWindow):
         self.saveSettings()
 
     def saveSettings(self):
+        if self.model.statepoint:
+            self.model.statepoint.close()
 
-        if len(self.model.previousViews) > 10:
-            self.model.previousViews = self.model.previousViews[-10:]
-        if len(self.model.subsequentViews) > 10:
-            self.model.subsequentViews = self.model.subsequentViews[-10:]
+        # get hashes for material.xml and geometry.xml at close
+        mat_xml_hash, geom_xml_hash = hash_model(self.model_path)
 
-        with open('plot_settings.pkl', 'wb') as file:
-            if self.model.statepoint:
-                self.model.statepoint.close()
-            pickle.dump(self.model, file)
+        pickle_data = {
+            'version': self.model.version,
+            'currentView': self.model.currentView,
+            'statepoint': self.model.statepoint,
+            'mat_xml_hash': mat_xml_hash,
+            'geom_xml_hash': geom_xml_hash
+        }
+        if self.model_path.is_file():
+            settings_pkl = self.model_path.with_name('plot_settings.pkl')
+        else:
+            settings_pkl = self.model_path / 'plot_settings.pkl'
+        with settings_pkl.open('wb') as file:
+            pickle.dump(pickle_data, file)
 
     def exportTallyData(self):
         # show export tool dialog
         self.showExportDialog()
+
+    def viewMaterialProps(self, id):
+        """display material properties in message box"""
+        mat = openmc.lib.materials[id]
+        if mat.name:
+            msg_str = f"Material {id} ({mat.name}) Properties\n\n"
+        else:
+            msg_str = f"Material {id} Properties\n\n"
+
+        # get density and temperature
+        dens_g = mat.get_density(units='g/cm3')
+        dens_a = mat.get_density(units='atom/b-cm')
+        msg_str += f"Density: {dens_g:.3f} g/cm3 ({dens_a:.3e} atom/b-cm)\n"
+        msg_str += f"Temperature: {mat.temperature} K\n\n"
+
+        # get nuclides and their densities
+        msg_str += "Nuclide densities [atom/b-cm]:\n"
+        for nuc, dens in zip(mat.nuclides, mat.densities):
+            msg_str += f'{nuc}: {dens:5.3e}\n'
+
+        msg_box = QMessageBox(self)
+        msg_box.setText(msg_str)
+        msg_box.setModal(False)
+        msg_box.show()

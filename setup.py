@@ -1,8 +1,18 @@
+from pathlib import Path
+
 from setuptools import setup
+
+# Get version information from __init__.py. This is ugly, but more reliable than
+# using an import.
+with open('openmc_plotter/__init__.py', 'r') as f:
+    version = f.readlines()[-1].split()[-1].strip("'")
+
+# read the contents of your README file
+long_description = Path(__file__).with_name("README.md").read_text()
 
 kwargs = {
     'name': 'openmc-plotter',
-    'version': '0.1.1',
+    'version': version,
     'packages': ['openmc_plotter'],
     'package_data': {'openmc_plotter' : ['assets/*.png']},
     'entry_points': {
@@ -13,8 +23,10 @@ kwargs = {
 
     # Metadata
     'author': 'OpenMC Development Team',
-    'author_email': 'openmc-users@googlegroups.com',
+    'author_email': 'openmc@anl.gov',
     'description': 'Plotting tool for OpenMC models and tally data',
+    'long_description': long_description,
+    'long_description_content_type': 'text/markdown',
     'url': 'https://github.com/openmc-dev/plotter',
     'download_url': 'https://github.com/openmc-dev/plotter',
     'project_urls': {
@@ -32,12 +44,14 @@ kwargs = {
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
 
     # Dependencies
-    'python_requires': '>=3.5',
+    'python_requires': '>=3.6',
     'install_requires': [
-        'openmc>0.12.0', 'numpy', 'matplotlib', 'PySide2'
+        'openmc>0.12.2', 'numpy', 'matplotlib', 'PySide2'
     ],
     'extras_require': {
         'test' : ['pytest', 'pytest-qt'],

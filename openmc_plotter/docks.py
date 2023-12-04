@@ -8,7 +8,7 @@ from PySide2.QtWidgets import (QWidget, QPushButton, QHBoxLayout, QVBoxLayout,
                                QComboBox, QSpinBox, QDoubleSpinBox, QSizePolicy,
                                QCheckBox, QDockWidget, QScrollArea, QListWidget,
                                QListWidgetItem, QTreeWidget, QTreeWidgetItem)
-from matplotlib import cm as mcolormaps
+import matplotlib.pyplot as plt
 import numpy as np
 import openmc
 
@@ -22,6 +22,7 @@ class PlotterDock(QDockWidget):
     """
     Dock widget with common settings for the plotting application
     """
+
     def __init__(self, model, font_metric, parent=None):
         super().__init__(parent)
 
@@ -36,6 +37,7 @@ class DomainDock(PlotterDock):
     """
     Domain options dock
     """
+
     def __init__(self, model, font_metric, parent=None):
         super().__init__(model, font_metric, parent)
 
@@ -159,7 +161,8 @@ class DomainDock(PlotterDock):
         self.domainAlphaBox.setSingleStep(0.05)
         self.domainAlphaBox.setDecimals(2)
         self.domainAlphaBox.setRange(0.0, 1.0)
-        self.domainAlphaBox.valueChanged.connect(self.main_window.editPlotAlpha)
+        self.domainAlphaBox.valueChanged.connect(
+            self.main_window.editPlotAlpha)
 
         # Visibility
         self.visibilityBox = QCheckBox(self)
@@ -179,8 +182,10 @@ class DomainDock(PlotterDock):
 
         # Advanced Color Options
         self.colorOptionsButton = QPushButton('Color Options...')
-        self.colorOptionsButton.setMinimumHeight(self.font_metric.height() * 1.6)
-        self.colorOptionsButton.clicked.connect(self.main_window.showColorDialog)
+        self.colorOptionsButton.setMinimumHeight(
+            self.font_metric.height() * 1.6)
+        self.colorOptionsButton.clicked.connect(
+            self.main_window.showColorDialog)
 
         # Options Form Layout
         self.opLayout = QFormLayout()
@@ -381,7 +386,6 @@ class TallyDock(PlotterDock):
         self.filterTree.setHeaderItem(header)
         self.filterTree.setItemHidden(header, True)
         self.filterTree.setColumnCount(1)
-        self.filterTree.itemChanged.connect(self.updateFilters)
 
         self.filter_map = {}
         self.bin_map = {}
@@ -394,29 +398,41 @@ class TallyDock(PlotterDock):
             # make checkable
             if not spatial_filters:
                 filter_item.setFlags(QtCore.Qt.ItemIsUserCheckable)
-                filter_item.setToolTip(0, "Only tallies with spatial filters are viewable.")
+                filter_item.setToolTip(
+                    0, "Only tallies with spatial filters are viewable.")
             else:
-                filter_item.setFlags(filter_item.flags() | QtCore.Qt.ItemIsTristate | QtCore.Qt.ItemIsUserCheckable)
+                filter_item.setFlags(
+                    filter_item.flags() | QtCore.Qt.ItemIsTristate | QtCore.Qt.ItemIsUserCheckable)
             filter_item.setCheckState(0, QtCore.Qt.Unchecked)
 
             # all mesh bins are selected by default and not shown in the dock
             if isinstance(tally_filter, openmc.MeshFilter):
                 filter_item.setCheckState(0, QtCore.Qt.Checked)
                 filter_item.setFlags(QtCore.Qt.ItemIsUserCheckable)
-                filter_item.setToolTip(0, "All Mesh bins are selected automatically")
+                filter_item.setToolTip(
+                    0, "All Mesh bins are selected automatically")
                 continue
 
             def _bin_sort_val(bin):
-                if isinstance(bin, Iterable) and all([isinstance(val, float) for val in bin]):
-                    return np.sum(bin)
+                if isinstance(bin, Iterable):
+                    if all([isinstance(val, float) for val in bin]):
+                        return np.sum(bin)
+                    else:
+                        return tuple(bin)
                 else:
                     return bin
 
-            for bin in sorted(tally_filter.bins, key=_bin_sort_val):
+            if isinstance(tally_filter, openmc.EnergyFunctionFilter):
+                bins = [0]
+            else:
+                bins = tally_filter.bins
+
+            for bin in sorted(bins, key=_bin_sort_val):
                 item = QTreeWidgetItem(filter_item, [str(bin),])
                 if not spatial_filters:
                     item.setFlags(QtCore.Qt.ItemIsUserCheckable)
-                    item.setToolTip(0, "Only tallies with spatial filters are viewable.")
+                    item.setToolTip(
+                        0, "Only tallies with spatial filters are viewable.")
                 else:
                     item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
                 item.setCheckState(0, QtCore.Qt.Unchecked)
@@ -480,12 +496,11 @@ class TallyDock(PlotterDock):
 
             if not spatial_filters:
                 self.valueBox.setEnabled(False)
-                self.valueBox.setToolTip("Only tallies with spatial filters are viewable.")
+                self.valueBox.setToolTip(
+                    "Only tallies with spatial filters are viewable.")
 
             # scores
             self.score_map = {}
-            self.scoresListWidget.itemClicked.connect(
-                self.main_window.updateScores)
             self.score_map.clear()
             self.scoresListWidget.clear()
 
@@ -515,12 +530,12 @@ class TallyDock(PlotterDock):
 
             self.scoresGroupBoxLayout = QVBoxLayout()
             self.scoresGroupBoxLayout.addWidget(self.scoresListWidget)
-            self.scoresGroupBox = Expander("Scores:", layout=self.scoresGroupBoxLayout)
+            self.scoresGroupBox = Expander(
+                "Scores:", layout=self.scoresGroupBoxLayout)
             self.tallySelectorLayout.addRow(self.scoresGroupBox)
 
             # nuclides
             self.nuclide_map = {}
-            self.nuclidesListWidget.itemClicked.connect(self.main_window.updateNuclides)
             self.nuclide_map.clear()
             self.nuclidesListWidget.clear()
 
@@ -550,7 +565,8 @@ class TallyDock(PlotterDock):
 
             self.nuclidesGroupBoxLayout = QVBoxLayout()
             self.nuclidesGroupBoxLayout.addWidget(self.nuclidesListWidget)
-            self.nuclidesGroupBox = Expander("Nuclides:", layout=self.nuclidesGroupBoxLayout)
+            self.nuclidesGroupBox = Expander(
+                "Nuclides:", layout=self.nuclidesGroupBoxLayout)
             self.tallySelectorLayout.addRow(self.nuclidesGroupBox)
 
     def updateMinMax(self):
@@ -569,22 +585,40 @@ class TallyDock(PlotterDock):
         self.tallySelector.setCurrentIndex(idx)
 
     def updateFilters(self):
+        # if the filters header is checked, uncheck all bins and return
         applied_filters = defaultdict(tuple)
         for f, f_item in self.filter_map.items():
             if type(f) == openmc.MeshFilter:
                 continue
 
             filter_checked = f_item.checkState(0)
-            if filter_checked != QtCore.Qt.Unchecked:
+            if filter_checked == QtCore.Qt.Unchecked:
+                for i in range(f_item.childCount()):
+                    bin_item = f_item.child(i)
+                    bin_item.setCheckState(0, QtCore.Qt.Unchecked)
+                applied_filters[f] = tuple()
+            elif filter_checked == QtCore.Qt.Checked:
+                if isinstance(f, openmc.EnergyFunctionFilter):
+                    applied_filters[f] = (0,)
+                else:
+                    for i in range(f_item.childCount()):
+                        bin_item = f_item.child(i)
+                        bin_item.setCheckState(0, QtCore.Qt.Checked)
+                    applied_filters[f] = tuple(range(f_item.childCount()))
+            elif filter_checked == QtCore.Qt.PartiallyChecked:
                 selected_bins = []
-                for idx, b in enumerate(f.bins):
+                if isinstance(f, openmc.EnergyFunctionFilter):
+                    bins = [0]
+                else:
+                    bins = f.bins
+                for idx, b in enumerate(bins):
                     b = b if not isinstance(b, Iterable) else tuple(b)
                     bin_checked = self.bin_map[(f, b)].checkState(0)
                     if bin_checked == QtCore.Qt.Checked:
                         selected_bins.append(idx)
                 applied_filters[f] = tuple(selected_bins)
 
-            self.model.appliedFilters = applied_filters
+        self.model.appliedFilters = applied_filters
 
     def updateScores(self):
         applied_scores = []
@@ -598,27 +632,34 @@ class TallyDock(PlotterDock):
             for score, score_box in self.score_map.items():
                 sunits = _SCORE_UNITS.get(score, _REACTION_UNITS)
                 empty_item = QListWidgetItem()
-                score_box.setFlags(empty_item.flags() | QtCore.Qt.ItemIsUserCheckable)
-                score_box.setFlags(empty_item.flags() & ~QtCore.Qt.ItemIsSelectable)
+                score_box.setFlags(empty_item.flags() |
+                                   QtCore.Qt.ItemIsUserCheckable)
+                score_box.setFlags(empty_item.flags() &
+                                   ~QtCore.Qt.ItemIsSelectable)
         elif 'total' in applied_scores:
             self.model.appliedScores = ('total',)
             # if total is selected, disable all other scores
             for score, score_box in self.score_map.items():
                 if score != 'total':
                     score_box.setFlags(QtCore.Qt.ItemIsUserCheckable)
-                    score_box.setToolTip("De-select 'total' to enable other scores")
+                    score_box.setToolTip(
+                        "De-select 'total' to enable other scores")
         else:
             # get units of applied scores
-            selected_units = _SCORE_UNITS.get(applied_scores[0], _REACTION_UNITS)
+            selected_units = _SCORE_UNITS.get(
+                applied_scores[0], _REACTION_UNITS)
             # disable scores with incompatible units
             for score, score_box in self.score_map.items():
                 sunits = _SCORE_UNITS.get(score, _REACTION_UNITS)
                 if sunits != selected_units:
                     score_box.setFlags(QtCore.Qt.ItemIsUserCheckable)
-                    score_box.setToolTip("Score is incompatible with currently selected scores")
+                    score_box.setToolTip(
+                        "Score is incompatible with currently selected scores")
                 else:
-                    score_box.setFlags(score_box.flags() | QtCore.Qt.ItemIsUserCheckable)
-                    score_box.setFlags(score_box.flags() & ~QtCore.Qt.ItemIsSelectable)
+                    score_box.setFlags(score_box.flags() |
+                                       QtCore.Qt.ItemIsUserCheckable)
+                    score_box.setFlags(score_box.flags() &
+                                       ~QtCore.Qt.ItemIsSelectable)
 
     def updateNuclides(self):
         applied_nuclides = []
@@ -632,13 +673,21 @@ class TallyDock(PlotterDock):
             for nuclide, nuclide_box in self.nuclide_map.items():
                 if nuclide != 'total':
                     nuclide_box.setFlags(QtCore.Qt.ItemIsUserCheckable)
-                    nuclide_box.setToolTip("De-select 'total' to enable other nuclides")
+                    nuclide_box.setToolTip(
+                        "De-select 'total' to enable other nuclides")
         elif not applied_nuclides:
             # if no nuclides are selected, enable all nuclides again
             for nuclide, nuclide_box in self.nuclide_map.items():
                 empty_item = QListWidgetItem()
-                nuclide_box.setFlags(empty_item.flags() | QtCore.Qt.ItemIsUserCheckable)
-                nuclide_box.setFlags(empty_item.flags() & ~QtCore.Qt.ItemIsSelectable)
+                nuclide_box.setFlags(empty_item.flags() |
+                                     QtCore.Qt.ItemIsUserCheckable)
+                nuclide_box.setFlags(empty_item.flags() &
+                                     ~QtCore.Qt.ItemIsSelectable)
+
+    def updateModel(self):
+        self.updateFilters()
+        self.updateScores()
+        self.updateNuclides()
 
     def update(self):
 
@@ -651,9 +700,11 @@ class TallyDock(PlotterDock):
             self.tallySelector.addItem("None")
             for idx, tally in enumerate(self.model.statepoint.tallies.values()):
                 if tally.name == "":
-                    self.tallySelector.addItem('Tally {}'.format(tally.id), userData=tally.id)
+                    self.tallySelector.addItem(
+                        f'Tally {tally.id}', userData=tally.id)
                 else:
-                    self.tallySelector.addItem('Tally {} "{}"'.format(tally.id, tally.name), userData=tally.id)
+                    self.tallySelector.addItem(
+                        f'Tally {tally.id} "{tally.name}"', userData=tally.id)
                 self.tally_map[idx] = tally
             self.updateSelectedTally()
             self.updateMinMax()
@@ -707,6 +758,7 @@ class ColorForm(QWidget):
         comma-separated set of values is entered, those values will be used as
         levels in the contour plot.
     """
+
     def __init__(self, model, main_window, field, colormaps=None):
         super().__init__()
 
@@ -732,7 +784,8 @@ class ColorForm(QWidget):
         # Color map selector
         self.colormapBox = QComboBox()
         if colormaps is None:
-            colormaps = sorted(m for m in mcolormaps.datad if not m.endswith("_r"))
+            colormaps = sorted(
+                m for m in plt.colormaps() if not m.endswith("_r"))
         for colormap in colormaps:
             self.colormapBox.addItem(colormap)
         cmap_connector = partial(main_window.editTallyDataColormap)
@@ -740,8 +793,10 @@ class ColorForm(QWidget):
 
         # Data indicator line check box
         self.dataIndicatorCheckBox = QCheckBox()
-        data_indicator_connector = partial(main_window.toggleTallyDataIndicator)
-        self.dataIndicatorCheckBox.stateChanged.connect(data_indicator_connector)
+        data_indicator_connector = partial(
+            main_window.toggleTallyDataIndicator)
+        self.dataIndicatorCheckBox.stateChanged.connect(
+            data_indicator_connector)
 
         # User specified min/max check box
         self.userMinMaxBox = QCheckBox()
